@@ -255,6 +255,140 @@ for p in data['projects']:
 
 ---
 
+## Release Ticket Process (RAG project)
+
+When asked to "make a release ticket" for one or more tickets, follow these steps in order:
+
+### 1. Find the next sprint
+
+Fetch active and future sprints for the RAG board to determine the current sprint and the one after it:
+```bash
+set -a && source /path/to/DoJiraStuff/.env && set +a
+# First get the board ID for RAG
+curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -H "Accept: application/json" \
+  "$JIRA_BASE_URL/rest/agile/1.0/board?projectKeyOrId=RAG" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for b in data.get('values', []):
+    print(b['id'], '-', b['name'])
+"
+```
+
+Then fetch sprints for that board:
+```bash
+curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -H "Accept: application/json" \
+  "$JIRA_BASE_URL/rest/agile/1.0/board/BOARD_ID/sprint?state=active,future" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for s in data.get('values', []):
+    print(s['id'], '-', s['name'], '-', s['state'])
+"
+```
+
+The current sprint has `state: active`. The next sprint is the first one with `state: future`.
+
+### 2. Create the release ticket
+
+- **Project:** RAG
+- **Issue type:** Task
+- **Title:** `Release RAG-XXXX RAG-XXXX` (list all bundled ticket keys)
+- **Story Points:** 1
+- **Product Type:** Features (`customfield_10290: { "id": "10475" }`)
+- **Sprint:** next sprint ID (`customfield_10010: SPRINT_ID` — pass as a bare integer, **not** `{ "id": N }`)
+- **Description (ADF):** "The goal of this ticket is to release the following ticket(s):" followed by a bullet list of each ticket key and summary
+- **Acceptance Criteria (ADF):** "Release the aforementioned tickets to production without regression."
+
+### 3. Link the release ticket to each original ticket
+
+First fetch available link types to confirm "implements" exists:
+```bash
+curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -H "Accept: application/json" \
+  "$JIRA_BASE_URL/rest/api/3/issueLinkType" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for lt in data.get('issueLinkTypes', []):
+    print(lt['id'], '-', lt['name'], '| inward:', lt['inward'], '| outward:', lt['outward'])
+"
+```
+
+Then create a link for each original ticket using the "implements" link type:
+```bash
+curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  "$JIRA_BASE_URL/rest/api/3/issueLink" \
+  -d '{
+    "type": { "name": "Implements" },
+    "inwardIssue": { "key": "ORIGINAL-KEY" },
+    "outwardIssue": { "key": "RELEASE-KEY" }
+  }'
+```
+
+### 4. Comment on each original ticket
+
+Leave a natural, conversational comment on each original ticket noting that it has completed acceptance testing and will be released in the linked release ticket. Include the release ticket key and a link. Use ADF format:
+
+```bash
+curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  "$JIRA_BASE_URL/rest/api/3/issue/ORIGINAL-KEY/comment" \
+  -d '{
+    "body": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [{ "type": "text", "text": "YOUR NATURAL COMMENT HERE" }]
+        }
+      ]
+    }
+  }'
+```
+
+### 5. Transition each original ticket to Done (Resolved)
+
+After commenting, transition each original ticket to "Done (Resolved)". First fetch available transitions:
+
+```bash
+set -a && source /path/to/DoJiraStuff/.env && set +a
+curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -H "Accept: application/json" \
+  "$JIRA_BASE_URL/rest/api/3/issue/ORIGINAL-KEY/transitions" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for t in data.get('transitions', []):
+    print(t['id'], '-', t['name'])
+"
+```
+
+Then apply the "Done" or "Done (Resolved)" transition:
+
+```bash
+curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  "$JIRA_BASE_URL/rest/api/3/issue/ORIGINAL-KEY/transitions" \
+  -d '{"transition": {"id": "TRANSITION_ID"}}'
+```
+
+### Summary checklist
+
+- [ ] Found next sprint ID
+- [ ] Created release ticket (Task, 1pt, Features, next sprint, correct title/body/AC)
+- [ ] Linked each original ticket to release ticket as "implements"
+- [ ] Left a comment on each original ticket referencing the release ticket
+- [ ] Transitioned each original ticket to Done (Resolved)
+
+---
+
 ## Notes
 
 - The Jira REST API v3 uses Atlassian Document Format (ADF) for rich text fields (description, comment body, acceptance criteria). Always use the ADF structure shown above — plain strings will be rejected.
