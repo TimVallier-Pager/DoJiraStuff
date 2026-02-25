@@ -2,8 +2,6 @@
 
 This project lets you manage Jira issues conversationally. Claude reads your credentials from `.env` and makes direct calls to the Jira REST API v3 using `curl`.
 
-> If a `CLAUDE.local.md` file exists in this directory, read it — it contains project-specific configuration, cached field IDs, and custom workflows.
-
 ---
 
 ## Credentials
