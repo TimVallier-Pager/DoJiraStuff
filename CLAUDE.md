@@ -259,96 +259,87 @@ for p in data['projects']:
 
 When asked to "make a release ticket" for one or more tickets, follow these steps in order:
 
-### 1. Find the next sprint
+### Step 1 — Preflight: fetch summaries + next sprint in one command
 
-RAG board ID is **210** — no lookup needed. Fetch sprints directly:
+Chain all preflight lookups into a single command. Board ID **210** is hardcoded — no board lookup needed.
 
 ```bash
 set -a && source /path/to/DoJiraStuff/.env && set +a
-curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -H "Accept: application/json" \
+echo "=== TICKETS ===" && \
+curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" -H "Accept: application/json" "$JIRA_BASE_URL/rest/api/3/issue/TICKET-A?fields=summary" | python3 -c "import json,sys; print(json.load(sys.stdin)['fields']['summary'])" && \
+curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" -H "Accept: application/json" "$JIRA_BASE_URL/rest/api/3/issue/TICKET-B?fields=summary" | python3 -c "import json,sys; print(json.load(sys.stdin)['fields']['summary'])" && \
+echo "=== SPRINTS ===" && \
+curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" -H "Accept: application/json" \
   "$JIRA_BASE_URL/rest/agile/1.0/board/210/sprint?state=active,future" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
 for s in data.get('values', []):
     print(s['id'], '-', s['name'], '-', s['state'])
-"
+" | head -5
 ```
 
 The current sprint has `state: active`. The next sprint is the first one with `state: future`.
 
-### 2. Create the release ticket
+### Step 2 — Create the release ticket
 
 - **Project:** RAG
 - **Issue type:** Task
 - **Title:** `Release RAG-XXXX RAG-XXXX` (list all bundled ticket keys)
 - **Story Points:** 1
 - **Product Type:** Features (`customfield_10290: { "id": "10475" }`)
-- **Sprint:** next sprint ID (`customfield_10010: SPRINT_ID` — pass as a bare integer, **not** `{ "id": N }`)
+- **Sprint:** next sprint ID (`customfield_10010: SPRINT_ID` — bare integer, **not** `{ "id": N }`)
 - **Description (ADF):** "The goal of this ticket is to release the following ticket(s):" followed by a bullet list of each ticket key and summary
 - **Acceptance Criteria (ADF):** "Release the aforementioned tickets to production without regression."
 
-### 3. Link the release ticket to each original ticket
+### Step 3 — Link, comment, and transition in one chained command
 
-"Implements" link type ID is **10201** — no lookup needed. Create a link for each original ticket:
-```bash
-curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -H "Accept: application/json" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  "$JIRA_BASE_URL/rest/api/3/issueLink" \
-  -d '{
-    "type": { "name": "Implements" },
-    "inwardIssue": { "key": "ORIGINAL-KEY" },
-    "outwardIssue": { "key": "RELEASE-KEY" }
-  }'
-```
+Run all post-creation steps in a single command. Use `-o /dev/null -w "%{http_code}"` for clean status output instead of noisy JSON. All IDs are hardcoded — no lookups needed.
 
-### 4. Comment on each original ticket
-
-Leave a natural, conversational comment on each original ticket noting that it has completed acceptance testing and will be released in the linked release ticket. Include the release ticket key and a link. Use ADF format:
+- **Implements link type ID:** `10201`
+- **Done (Resolved) transition ID:** `131`
 
 ```bash
-curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -H "Accept: application/json" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  "$JIRA_BASE_URL/rest/api/3/issue/ORIGINAL-KEY/comment" \
-  -d '{
-    "body": {
-      "type": "doc",
-      "version": 1,
-      "content": [
-        {
-          "type": "paragraph",
-          "content": [{ "type": "text", "text": "YOUR NATURAL COMMENT HERE" }]
-        }
-      ]
-    }
-  }'
+set -a && source /path/to/DoJiraStuff/.env && set +a && \
+echo "--- Linking TICKET-A ---" && \
+curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -H "Accept: application/json" -H "Content-Type: application/json" \
+  -X POST "$JIRA_BASE_URL/rest/api/3/issueLink" \
+  -d '{"type":{"id":"10201"},"inwardIssue":{"key":"TICKET-A"},"outwardIssue":{"key":"RELEASE-KEY"}}' && \
+echo && echo "--- Linking TICKET-B ---" && \
+curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -H "Accept: application/json" -H "Content-Type: application/json" \
+  -X POST "$JIRA_BASE_URL/rest/api/3/issueLink" \
+  -d '{"type":{"id":"10201"},"inwardIssue":{"key":"TICKET-B"},"outwardIssue":{"key":"RELEASE-KEY"}}' && \
+echo && echo "--- Commenting on TICKET-A ---" && \
+curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -H "Accept: application/json" -H "Content-Type: application/json" \
+  -X POST "$JIRA_BASE_URL/rest/api/3/issue/TICKET-A/comment" \
+  -d '{"body":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"NATURAL COMMENT REFERENCING RELEASE-KEY"}]}]}}' && \
+echo && echo "--- Commenting on TICKET-B ---" && \
+curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -H "Accept: application/json" -H "Content-Type: application/json" \
+  -X POST "$JIRA_BASE_URL/rest/api/3/issue/TICKET-B/comment" \
+  -d '{"body":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"NATURAL COMMENT REFERENCING RELEASE-KEY"}]}]}}' && \
+echo && echo "--- Transitioning TICKET-A to Done (Resolved) ---" && \
+curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -H "Accept: application/json" -H "Content-Type: application/json" \
+  -X POST "$JIRA_BASE_URL/rest/api/3/issue/TICKET-A/transitions" \
+  -d '{"transition":{"id":"131"}}' && \
+echo && echo "--- Transitioning TICKET-B to Done (Resolved) ---" && \
+curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -H "Accept: application/json" -H "Content-Type: application/json" \
+  -X POST "$JIRA_BASE_URL/rest/api/3/issue/TICKET-B/transitions" \
+  -d '{"transition":{"id":"131"}}' && echo
 ```
 
-### 5. Transition each original ticket to Done (Resolved)
-
-Done (Resolved) transition ID is **131** — no lookup needed.
-
-```bash
-set -a && source /path/to/DoJiraStuff/.env && set +a
-curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -H "Accept: application/json" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  "$JIRA_BASE_URL/rest/api/3/issue/ORIGINAL-KEY/transitions" \
-  -d '{"transition": {"id": "131"}}'
-```
+Expected output: all `201` (created) or `204` (no content) status codes.
 
 ### Summary checklist
 
-- [ ] Found next sprint ID
+- [ ] Preflight: fetched all ticket summaries + next sprint in one command
 - [ ] Created release ticket (Task, 1pt, Features, next sprint, correct title/body/AC)
-- [ ] Linked each original ticket to release ticket as "implements"
-- [ ] Left a comment on each original ticket referencing the release ticket
-- [ ] Transitioned each original ticket to Done (Resolved)
+- [ ] Links, comments, and transitions all ran in one chained command
+- [ ] All steps returned 201 or 204
 
 ---
 
