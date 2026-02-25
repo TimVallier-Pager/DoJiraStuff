@@ -2,6 +2,8 @@
 
 This project lets you manage Jira issues conversationally. Claude reads your credentials from `.env` and makes direct calls to the Jira REST API v3 using `curl`.
 
+> If a `CLAUDE.local.md` file exists in this directory, read it — it contains project-specific configuration, cached field IDs, and custom workflows.
+
 ---
 
 ## Credentials
@@ -50,8 +52,6 @@ curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
 
 ### Get a specific issue
 
-Replace `PROJECT` with the resolved project key (e.g. `PROJ`, `ENG`).
-
 ```bash
 set -a && source /path/to/DoJiraStuff/.env && set +a
 curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
@@ -73,7 +73,7 @@ Useful JQL patterns (substitute the actual project key for `PROJECT`):
 - `project = PROJECT AND assignee = currentUser()` — my issues
 - `project = PROJECT AND status != Done ORDER BY created DESC` — open issues
 - `project = PROJECT AND priority = High` — high priority
-- `project = PROJECT AND text ~ "login"` — full-text search
+- `project = PROJECT AND text ~ "keyword"` — full-text search
 - `project = PROJECT AND sprint in openSprints()` — current sprint
 
 ### Create an issue
@@ -104,18 +104,12 @@ curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
   }'
 ```
 
-Issue types available: `Task`, `Bug`, `Story`, `Epic`, `Subtask`
+Common issue types: `Task`, `Bug`, `Story`, `Epic`, `Spike`, `Sub-task`
 Priority values: `Highest`, `High`, `Medium`, `Low`, `Lowest`
 
-To set priority, add to `fields`:
-```json
-"priority": { "name": "High" }
-```
-
-To set assignee (use accountId):
-```json
-"assignee": { "accountId": "ACCOUNT_ID_HERE" }
-```
+To set priority: `"priority": { "name": "High" }`
+To set assignee: `"assignee": { "accountId": "ACCOUNT_ID_HERE" }`
+To set sprint: `"customfield_10010": SPRINT_ID` (bare integer)
 
 ### Update an issue
 
@@ -126,11 +120,7 @@ curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
   -H "Content-Type: application/json" \
   -X PUT \
   "$JIRA_BASE_URL/rest/api/3/issue/PROJECT-42" \
-  -d '{
-    "fields": {
-      "summary": "Updated summary"
-    }
-  }'
+  -d '{"fields": {"summary": "Updated summary"}}'
 ```
 
 ### Transition an issue (change status)
@@ -140,17 +130,19 @@ First, get available transitions:
 set -a && source /path/to/DoJiraStuff/.env && set +a
 curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
   -H "Accept: application/json" \
-  "$JIRA_BASE_URL/rest/api/3/issue/PROJECT-42/transitions"
+  "$JIRA_BASE_URL/rest/api/3/issue/PROJECT-42/transitions" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for t in data.get('transitions', []):
+    print(t['id'], '-', t['name'])
+"
 ```
 
-Then apply the transition using its `id`:
+Then apply:
 ```bash
-set -a && source /path/to/DoJiraStuff/.env && set +a
-curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -H "Accept: application/json" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  "$JIRA_BASE_URL/rest/api/3/issue/PROJECT-42/transitions" \
+curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -H "Accept: application/json" -H "Content-Type: application/json" \
+  -X POST "$JIRA_BASE_URL/rest/api/3/issue/PROJECT-42/transitions" \
   -d '{"transition": {"id": "TRANSITION_ID"}}'
 ```
 
@@ -181,26 +173,33 @@ curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
 
 ```bash
 set -a && source /path/to/DoJiraStuff/.env && set +a
-curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -X DELETE \
-  "$JIRA_BASE_URL/rest/api/3/issue/PROJECT-42"
+curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -X DELETE "$JIRA_BASE_URL/rest/api/3/issue/PROJECT-42"
 ```
 
-### Get project metadata (issue types, fields, etc.)
+### Link two issues
 
 ```bash
 set -a && source /path/to/DoJiraStuff/.env && set +a
-curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -H "Accept: application/json" \
-  "$JIRA_BASE_URL/rest/api/3/project/PROJECT"
+# Get available link types first
+curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" -H "Accept: application/json" \
+  "$JIRA_BASE_URL/rest/api/3/issueLinkType" | python3 -c "
+import json, sys
+for lt in json.load(sys.stdin).get('issueLinkTypes', []):
+    print(lt['id'], '-', lt['name'])
+"
+# Then create the link
+curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  -H "Accept: application/json" -H "Content-Type: application/json" \
+  -X POST "$JIRA_BASE_URL/rest/api/3/issueLink" \
+  -d '{"type":{"id":"LINK_TYPE_ID"},"inwardIssue":{"key":"PROJ-1"},"outwardIssue":{"key":"PROJ-2"}}'
 ```
 
-### Look up a user by email (to get accountId for assignment)
+### Look up a user by email
 
 ```bash
 set -a && source /path/to/DoJiraStuff/.env && set +a
-curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -H "Accept: application/json" \
+curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" -H "Accept: application/json" \
   "$JIRA_BASE_URL/rest/api/3/user/search?query=someone@yourcompany.com"
 ```
 
@@ -209,22 +208,22 @@ curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
 ## Response Formatting
 
 When displaying Jira results to the user:
-- Show issue key (e.g. `PROJ-42`, `ENG-7`) as a bold label
+- Show issue key (e.g. `PROJ-42`) as a bold label
 - Include summary, status, assignee, and priority when available
-- For lists of issues, use a compact table or bulleted list
+- For lists, use a compact table or bulleted list
 - For a single issue, show full details including description
 - Always include the direct URL: `$JIRA_BASE_URL/browse/ISSUE-KEY`
+- Use `-o /dev/null -w "%{http_code}"` on write operations for clean output
 
 ---
 
 ## Discovering Required Fields
 
-Before creating an issue in an unfamiliar project, fetch the field metadata to find required fields and allowed values:
+Before creating an issue in an unfamiliar project, fetch field metadata:
 
 ```bash
 set -a && source /path/to/DoJiraStuff/.env && set +a
-curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -H "Accept: application/json" \
+curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" -H "Accept: application/json" \
   "$JIRA_BASE_URL/rest/api/3/issue/createmeta?projectKeys=PROJECT&issuetypeIds=ISSUETYPE_ID&expand=projects.issuetypes.fields" \
   | python3 -c "
 import json, sys
@@ -241,8 +240,7 @@ for p in data['projects']:
 To get issue type IDs for a project:
 ```bash
 set -a && source /path/to/DoJiraStuff/.env && set +a
-curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -H "Accept: application/json" \
+curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" -H "Accept: application/json" \
   "$JIRA_BASE_URL/rest/api/3/issue/createmeta?projectKeys=PROJECT" \
   | python3 -c "
 import json, sys
@@ -255,99 +253,11 @@ for p in data['projects']:
 
 ---
 
-## Release Ticket Process (RAG project)
-
-When asked to "make a release ticket" for one or more tickets, follow these steps in order:
-
-### Step 1 — Preflight: fetch summaries + next sprint in one command
-
-Chain all preflight lookups into a single command. Board ID **210** is hardcoded — no board lookup needed.
-
-```bash
-set -a && source /path/to/DoJiraStuff/.env && set +a
-echo "=== TICKETS ===" && \
-curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" -H "Accept: application/json" "$JIRA_BASE_URL/rest/api/3/issue/TICKET-A?fields=summary" | python3 -c "import json,sys; print(json.load(sys.stdin)['fields']['summary'])" && \
-curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" -H "Accept: application/json" "$JIRA_BASE_URL/rest/api/3/issue/TICKET-B?fields=summary" | python3 -c "import json,sys; print(json.load(sys.stdin)['fields']['summary'])" && \
-echo "=== SPRINTS ===" && \
-curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" -H "Accept: application/json" \
-  "$JIRA_BASE_URL/rest/agile/1.0/board/210/sprint?state=active,future" | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-for s in data.get('values', []):
-    print(s['id'], '-', s['name'], '-', s['state'])
-" | head -5
-```
-
-The current sprint has `state: active`. The next sprint is the first one with `state: future`.
-
-### Step 2 — Create the release ticket
-
-- **Project:** RAG
-- **Issue type:** Task
-- **Title:** `Release RAG-XXXX RAG-XXXX` (list all bundled ticket keys)
-- **Story Points:** 1
-- **Product Type:** Features (`customfield_10290: { "id": "10475" }`)
-- **Sprint:** next sprint ID (`customfield_10010: SPRINT_ID` — bare integer, **not** `{ "id": N }`)
-- **Description (ADF):** "The goal of this ticket is to release the following ticket(s):" followed by a bullet list of each ticket key and summary
-- **Acceptance Criteria (ADF):** "Release the aforementioned tickets to production without regression."
-
-### Step 3 — Link, comment, and transition in one chained command
-
-Run all post-creation steps in a single command. Use `-o /dev/null -w "%{http_code}"` for clean status output instead of noisy JSON. All IDs are hardcoded — no lookups needed.
-
-- **Implements link type ID:** `10201`
-- **Done (Resolved) transition ID:** `131`
-
-```bash
-set -a && source /path/to/DoJiraStuff/.env && set +a && \
-echo "--- Linking TICKET-A ---" && \
-curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -H "Accept: application/json" -H "Content-Type: application/json" \
-  -X POST "$JIRA_BASE_URL/rest/api/3/issueLink" \
-  -d '{"type":{"id":"10201"},"inwardIssue":{"key":"TICKET-A"},"outwardIssue":{"key":"RELEASE-KEY"}}' && \
-echo && echo "--- Linking TICKET-B ---" && \
-curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -H "Accept: application/json" -H "Content-Type: application/json" \
-  -X POST "$JIRA_BASE_URL/rest/api/3/issueLink" \
-  -d '{"type":{"id":"10201"},"inwardIssue":{"key":"TICKET-B"},"outwardIssue":{"key":"RELEASE-KEY"}}' && \
-echo && echo "--- Commenting on TICKET-A ---" && \
-curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -H "Accept: application/json" -H "Content-Type: application/json" \
-  -X POST "$JIRA_BASE_URL/rest/api/3/issue/TICKET-A/comment" \
-  -d '{"body":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"NATURAL COMMENT REFERENCING RELEASE-KEY"}]}]}}' && \
-echo && echo "--- Commenting on TICKET-B ---" && \
-curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -H "Accept: application/json" -H "Content-Type: application/json" \
-  -X POST "$JIRA_BASE_URL/rest/api/3/issue/TICKET-B/comment" \
-  -d '{"body":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"NATURAL COMMENT REFERENCING RELEASE-KEY"}]}]}}' && \
-echo && echo "--- Transitioning TICKET-A to Done (Resolved) ---" && \
-curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -H "Accept: application/json" -H "Content-Type: application/json" \
-  -X POST "$JIRA_BASE_URL/rest/api/3/issue/TICKET-A/transitions" \
-  -d '{"transition":{"id":"131"}}' && \
-echo && echo "--- Transitioning TICKET-B to Done (Resolved) ---" && \
-curl -s -o /dev/null -w "%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  -H "Accept: application/json" -H "Content-Type: application/json" \
-  -X POST "$JIRA_BASE_URL/rest/api/3/issue/TICKET-B/transitions" \
-  -d '{"transition":{"id":"131"}}' && echo
-```
-
-Expected output: all `201` (created) or `204` (no content) status codes.
-
-### Summary checklist
-
-- [ ] Preflight: fetched all ticket summaries + next sprint in one command
-- [ ] Created release ticket (Task, 1pt, Features, next sprint, correct title/body/AC)
-- [ ] Links, comments, and transitions all ran in one chained command
-- [ ] All steps returned 201 or 204
-
----
-
 ## Notes
 
-- The Jira REST API v3 uses Atlassian Document Format (ADF) for rich text fields (description, comment body, acceptance criteria). Always use the ADF structure shown above — plain strings will be rejected.
-- URL-encode JQL when passing as a query param (spaces → `%20`, `=` → `%3D`, `"` → `%22`), or use `--data-urlencode` with curl's `-G` flag.
-- A 204 response on PUT/DELETE means success (no body returned).
-- Transitions require fetching available transition IDs first — they vary per project workflow.
-- Always use `set -a && source /path/to/.env && set +a` (not just `source .env`) to ensure variables are exported to subshells.
-- Select/option custom fields require passing `{ "id": "OPTION_ID" }` — not the display name string.
+- **ADF required** — Jira REST API v3 rejects plain strings for rich text fields (description, comment body, acceptance criteria). Always use the ADF doc structure shown above.
+- **URL-encode JQL** — spaces → `%20`, `=` → `%3D`, `"` → `%22`
+- **204 = success** — PUT/DELETE return no body on success
+- **Sprint field** — pass as bare integer (`customfield_10010: 6943`), not `{ "id": N }`
+- **Select fields** — pass as `{ "id": "OPTION_ID" }`, not the display name string
+- **`set -a` required** — plain `source .env` doesn't export vars to subshells; always use `set -a && source /path/.env && set +a`
