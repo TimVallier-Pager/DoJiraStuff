@@ -63,7 +63,7 @@ curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
 set -a && source /path/to/DoJiraStuff/.env && set +a
 curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
   -H "Accept: application/json" \
-  "$JIRA_BASE_URL/rest/api/3/search?jql=project%3DPROJECT%20AND%20status%3D%22In%20Progress%22&fields=summary,status,assignee,priority"
+  "$JIRA_BASE_URL/rest/api/3/search/jql?jql=project%3DPROJECT%20AND%20status%3D%22In%20Progress%22&fields=summary,status,assignee,priority"
 ```
 
 Useful JQL patterns (substitute the actual project key for `PROJECT`):
